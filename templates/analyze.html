@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Analyze Video</h1>
+
+{% if errors %}
+<div class="error-box">
+    {% for e in errors %}
+    <p>{{ e }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if not results %}
+<form method="POST" enctype="multipart/form-data" id="analyze-form">
+    <div class="form-group">
+        <label for="subject_id">Subject ID</label>
+        <input type="text" id="subject_id" name="subject_id" required
+               value="{{ form.get('subject_id', '') if form else '' }}">
+    </div>
+    <div class="form-group">
+        <label for="age">Age (years, 1-18)</label>
+        <input type="number" id="age" name="age" min="1" max="18" required
+               value="{{ form.get('age', '') if form else '' }}">
+    </div>
+    <div class="form-group">
+        <label for="screen_time_h">Screen Time (hours/day)</label>
+        <input type="number" id="screen_time_h" name="screen_time_h"
+               min="0" max="24" step="0.1" required
+               value="{{ form.get('screen_time_h', '') if form else '' }}">
+    </div>
+    <div class="form-group">
+        <label for="symptom_score">Symptom Score (OSDI, 0-100)</label>
+        <input type="number" id="symptom_score" name="symptom_score"
+               min="0" max="100" required
+               value="{{ form.get('symptom_score', '') if form else '' }}">
+    </div>
+    <div class="form-group">
+        <label for="nibut_s">NIBUT (seconds, 0-30)</label>
+        <input type="number" id="nibut_s" name="nibut_s"
+               min="0" max="30" step="0.1" required
+               value="{{ form.get('nibut_s', '') if form else '' }}">
+    </div>
+    <div class="form-group">
+        <label for="video">Video File (.mp4, .avi, .mov)</label>
+        <input type="file" id="video" name="video"
+               accept=".mp4,.avi,.mov" required>
+    </div>
+    <button type="submit" id="submit-btn">Analyze</button>
+    <div id="spinner" class="spinner hidden">Processing video... This may take up to a minute.</div>
+</form>
+
+<script>
+document.getElementById("analyze-form").addEventListener("submit", function() {
+    document.getElementById("submit-btn").disabled = true;
+    document.getElementById("spinner").classList.remove("hidden");
+});
+</script>
+{% endif %}
+
+{% if results %}
+<div class="results-section">
+    <h2>Blink Metrics</h2>
+    <table class="metrics-table">
+        <tr><th>Metric</th><th>Value</th></tr>
+        <tr><td>Blink Count</td><td>{{ results.blink_count }}</td></tr>
+        <tr><td>Blink Rate (per min)</td><td>{{ results.blink_rate }}</td></tr>
+        <tr>
+            <td>Incomplete Blink %</td>
+            <td>{{ results.incomplete_blink_pct if results.incomplete_blink_pct is not none else 'N/A' }}</td>
+        </tr>
+        <tr>
+            <td>Mean Interblink Interval (s)</td>
+            <td>{{ results.mean_interblink_interval if results.mean_interblink_interval is not none else 'N/A' }}</td>
+        </tr>
+    </table>
+
+    <h2>DBSP Classification</h2>
+    <div class="dbsp-badge dbsp-{{ dbsp_class }}">
+        {{ dbsp_class | upper }}
+    </div>
+
+    <h2>EAR Signal</h2>
+    <img src="data:image/png;base64,{{ ear_plot_b64 }}" alt="EAR Signal" class="plot-img">
+
+    {% if sample_frames %}
+    <h2>Sample Frames</h2>
+    <div class="frame-grid">
+        {% for f in sample_frames %}
+        <div class="frame-card">
+            <img src="data:image/jpeg;base64,{{ f.data }}" alt="{{ f.label }}">
+            <span class="frame-label">{{ f.label | upper }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <h2>Download</h2>
+    <a href="data:text/csv;base64,{{ csv_string | b64encode }}"
+       download="blink_data.csv" class="btn">Download CSV</a>
+    <a href="{{ url_for('analyze') }}" class="btn btn-secondary">Analyze Another</a>
+</div>
+{% endif %}
+{% endblock %}

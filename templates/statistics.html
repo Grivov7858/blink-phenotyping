@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Statistical Analysis</h1>
+
+{% if errors %}
+<div class="error-box">
+    {% for e in errors %}
+    <p>{{ e }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if not stats %}
+<p class="instructions">
+    Upload a CSV file containing accumulated patient data to run logistic regression analysis.
+    The CSV must match the format from the "Download CSV" button on the Analyze page.
+</p>
+<form method="POST" enctype="multipart/form-data">
+    <div class="form-group">
+        <label for="csv_file">Patient Data CSV</label>
+        <input type="file" id="csv_file" name="csv_file" accept=".csv" required>
+    </div>
+    <button type="submit">Run Analysis</button>
+</form>
+{% endif %}
+
+{% if stats %}
+<div class="results-section">
+    <h2>Model Performance</h2>
+    <table class="metrics-table">
+        <tr><th>Metric</th><th>Value</th></tr>
+        <tr><td>AUC</td><td>{{ stats.auc }}</td></tr>
+        <tr><td>Sensitivity</td><td>{{ stats.sensitivity }}</td></tr>
+        <tr><td>Specificity</td><td>{{ stats.specificity }}</td></tr>
+    </table>
+
+    <h2>ROC Curve</h2>
+    <img src="data:image/png;base64,{{ plots['roc_curve.png'] }}" alt="ROC Curve" class="plot-img">
+
+    <h2>Confusion Matrix</h2>
+    <img src="data:image/png;base64,{{ plots['confusion_matrix.png'] }}" alt="Confusion Matrix" class="plot-img">
+
+    <h2>Download</h2>
+    <a href="data:application/zip;base64,{{ zip_b64 }}"
+       download="statistics_plots.zip" class="btn">Download All Plots (ZIP)</a>
+    <a href="{{ url_for('statistics') }}" class="btn btn-secondary">Run Another Analysis</a>
+</div>
+{% endif %}
+{% endblock %}
