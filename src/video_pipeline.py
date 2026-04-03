@@ -1,6 +1,9 @@
+import os
+import sys
+import bz2
 import cv2
 import numpy as np
-import mediapipe as mp
+import dlib
 from typing import Optional
 from src.ear import compute_ear, average_ear
 from src.blink_detector import calibrate_threshold, detect_blinks_from_ear_signal
@@ -8,8 +11,74 @@ from src.feature_extraction import compute_blink_metrics
 from src.dbsp_classifier import classify_dbsp
 from src.visualization import generate_ear_plot
 
-LEFT_EYE = [362, 385, 387, 263, 373, 380]
-RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+# dlib 68-landmark eye indices (0-indexed)
+# Each eye has 6 points in the order: [corner_left, upper_left, upper_right, corner_right, lower_right, lower_left]
+RIGHT_EYE = [36, 37, 38, 39, 40, 41]
+LEFT_EYE = [42, 43, 44, 45, 46, 47]
+
+# Shape predictor model path
+_MODEL_FILENAME = "shape_predictor_68_face_landmarks.dat"
+
+
+def _get_model_path() -> str:
+    """Find the shape predictor model file.
+
+    Looks in: same dir as this file, project root, bundled PyInstaller path.
+    Downloads automatically if not found.
+    """
+    candidates = [
+        os.path.join(os.path.dirname(__file__), _MODEL_FILENAME),
+        os.path.join(os.path.dirname(__file__), "..", _MODEL_FILENAME),
+        os.path.join(os.path.dirname(__file__), "..", "models", _MODEL_FILENAME),
+    ]
+
+    # PyInstaller bundle path
+    if getattr(sys, "frozen", False):
+        candidates.append(os.path.join(sys._MEIPASS, _MODEL_FILENAME))
+        candidates.append(os.path.join(os.path.dirname(sys.executable), _MODEL_FILENAME))
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return os.path.abspath(path)
+
+    # Auto-download if not found
+    download_dir = os.path.join(os.path.dirname(__file__), "..")
+    return _download_model(download_dir)
+
+
+def _download_model(dest_dir: str) -> str:
+    """Download and extract the dlib shape predictor model."""
+    import urllib.request
+
+    url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
+    bz2_path = os.path.join(dest_dir, _MODEL_FILENAME + ".bz2")
+    dat_path = os.path.join(dest_dir, _MODEL_FILENAME)
+
+    print(f"Downloading face landmark model (~100MB)... ", end="", flush=True)
+    urllib.request.urlretrieve(url, bz2_path)
+    print("done. Extracting... ", end="", flush=True)
+
+    with bz2.BZ2File(bz2_path, "rb") as src, open(dat_path, "wb") as dst:
+        dst.write(src.read())
+
+    os.remove(bz2_path)
+    print("done.")
+    return dat_path
+
+
+# Lazy-loaded globals
+_detector = None
+_predictor = None
+
+
+def _get_detector_and_predictor():
+    """Lazy-load dlib face detector and shape predictor."""
+    global _detector, _predictor
+    if _detector is None:
+        _detector = dlib.get_frontal_face_detector()
+        model_path = _get_model_path()
+        _predictor = dlib.shape_predictor(model_path)
+    return _detector, _predictor
 
 
 def validate_video(size_bytes: int, duration_s: Optional[float], total_frames: Optional[int]) -> list[str]:
@@ -23,12 +92,13 @@ def validate_video(size_bytes: int, duration_s: Optional[float], total_frames: O
     return errors
 
 
-def _extract_eye_landmarks(face_landmarks, indices, w, h):
+def _extract_eye_landmarks(shape, indices):
+    """Extract 6 eye landmarks as numpy array of (x, y) pixel coords."""
     points = []
     for idx in indices:
-        lm = face_landmarks.landmark[idx]
-        points.append([lm.x * w, lm.y * h])
-    return np.array(points)
+        p = shape.part(idx)
+        points.append([p.x, p.y])
+    return np.array(points, dtype=np.float64)
 
 
 def process_video(video_path: str) -> dict:
@@ -45,10 +115,7 @@ def process_video(video_path: str) -> dict:
         cap.release()
         return {"errors": validation_errors}
 
-    face_mesh = mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=False, max_num_faces=1, refine_landmarks=True,
-        min_detection_confidence=0.5, min_tracking_confidence=0.5,
-    )
+    detector, predictor = _get_detector_and_predictor()
 
     ear_signal = []
     frames_with_face = 0
@@ -58,22 +125,23 @@ def process_video(video_path: str) -> dict:
         ret, frame = cap.read()
         if not ret:
             break
-        h, w = frame.shape[:2]
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_mesh.process(rgb)
-        if results.multi_face_landmarks:
-            face = results.multi_face_landmarks[0]
-            left = _extract_eye_landmarks(face, LEFT_EYE, w, h)
-            right = _extract_eye_landmarks(face, RIGHT_EYE, w, h)
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = detector(gray, 0)
+
+        if len(faces) > 0:
+            shape = predictor(gray, faces[0])
+            left = _extract_eye_landmarks(shape, LEFT_EYE)
+            right = _extract_eye_landmarks(shape, RIGHT_EYE)
             ear = average_ear(left, right)
             ear_signal.append(ear)
             frames_with_face += 1
         else:
             ear_signal.append(None)
+
         frame_index += 1
 
     cap.release()
-    face_mesh.close()
 
     valid_ears = [e for e in ear_signal if e is not None]
 
@@ -97,13 +165,13 @@ def process_video(video_path: str) -> dict:
     dbsp_class = classify_dbsp(metrics["blink_rate"], metrics["incomplete_blink_pct"])
     ear_plot_png = generate_ear_plot(continuous_signal, blinks, threshold, fps)
 
+    # Capture sample blink frames
     sample_frames = []
     cap = cv2.VideoCapture(video_path)
     frames_to_capture = set()
 
     if valid_ears:
-        open_frame_idx = 15
-        frames_to_capture.add(("open", open_frame_idx))
+        frames_to_capture.add(("open", 15))
 
     for i, b in enumerate(blinks[:3]):
         mid = (b["start_frame"] + b["end_frame"]) // 2

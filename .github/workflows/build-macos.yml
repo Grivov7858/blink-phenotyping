@@ -7,20 +7,32 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-13
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Install system dependencies
+        run: |
+          brew install cmake
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+
+      - name: Download dlib shape predictor model
+        run: |
+          curl -L -o shape_predictor_68_face_landmarks.dat.bz2 \
+            http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
+          bunzip2 shape_predictor_68_face_landmarks.dat.bz2
 
       - name: Build app
         run: |
@@ -30,7 +42,8 @@ jobs:
             --windowed \
             --add-data "templates:templates" \
             --add-data "static:static" \
-            --hidden-import mediapipe \
+            --add-data "shape_predictor_68_face_landmarks.dat:." \
+            --hidden-import dlib \
             --hidden-import sklearn \
             --hidden-import sklearn.linear_model \
             --hidden-import sklearn.metrics \
@@ -39,7 +52,6 @@ jobs:
             --hidden-import sklearn.utils._heap \
             --hidden-import sklearn.utils._sorting \
             --hidden-import sklearn.utils._vector_sentinel \
-            --collect-data mediapipe \
             --collect-data sklearn \
             app.py
 
